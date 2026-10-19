@@ -1,0 +1,7 @@
+node_modules/
+*.bak
+*.bak-review-*
+*.log
+.DS_Store
+legacy-lib/
+assets/

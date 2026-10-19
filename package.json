@@ -1,0 +1,59 @@
+{
+  "name": "dsh-enhance-prompt",
+  "version": "0.2.0",
+  "description": "DSH 原生增强提示词：把输入框草稿交给模型改写得更清晰具体，原地替换并可一键恢复",
+  "type": "module",
+  "main": "./dsh-enhance-prompt.single.mjs",
+  "exports": {
+    ".": {
+      "default": "./dsh-enhance-prompt.single.mjs"
+    },
+    "./client": "./client.js",
+    "./package.json": "./package.json"
+  },
+  "license": "MIT",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "prompt",
+    "enhance"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web"
+    }
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dshTarget": "0.2.1-rc.2",
+  "files": [
+    "dsh-enhance-prompt.single.mjs",
+    "client.js",
+    "cordis.patch.yml",
+    "package.json",
+    "README.md",
+    "MODELS.md",
+    "LICENSE"
+  ],
+  "peerDependenciesMeta": {
+    "@deepseek-ai/cordis": {
+      "optional": true
+    }
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/dbq7czj-bot/-dsh-enhance-prompt.git"
+  },
+  "homepage": "https://github.com/dbq7czj-bot/-dsh-enhance-prompt#readme",
+  "bugs": {
+    "url": "https://github.com/dbq7czj-bot/-dsh-enhance-prompt/issues"
+  }
+}

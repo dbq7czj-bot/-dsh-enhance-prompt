@@ -1,0 +1,7 @@
+# dsh-enhance-prompt bundle patch
+# 把插件真正插进 Cordis 插件树（node 半），客户端半由 package.json
+# 的 dsh.client 声明自动发现。
+- insert:
+    - id: dsh-enhance-prompt
+      name: dsh-enhance-prompt
+      inject: [webServer]
