@@ -1,6 +1,12 @@
 # dsh-enhance-prompt
 
+[![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+[![DSH](https://img.shields.io/badge/DSH-0.2.1--rc.2-blue)](https://github.com/deepseek-ai/deepseek-harness)
+[![Node](https://img.shields.io/badge/node-%3E%3D22-green)](package.json)
+
 DSH（DeepSeek Harness）原生增强提示词插件：把输入框草稿交给大模型改写得更清晰、更具体，原地替换，可一键恢复。
+
+![输入框增强按钮](./screenshot.png)
 
 ## 功能
 
@@ -72,6 +78,55 @@ npm install --save file:../../plugins/dsh-enhance-prompt
 | `strong` | 直接使用宿主默认模型 |
 
 客户端选择会存到 `localStorage` 的 `dsh-enhance-prompt:tier`。
+
+## 上下文增强：读到的是会话日志本身
+
+大多数增强插件会把「最近几条对话」拼进 prompt。本插件不同——它直接读 DSH 的会话日志文件
+（`~/.dsh/sessions/<projectKey>/<session-id>/session.v4.jsonl.zstd`），按需解码其中的帧。
+
+### 它实际做了什么
+
+会话日志是**多帧拼接的 zstd 容器**：每帧独立可解压，帧内是若干行 JSONL。本插件：
+
+- **只解需要的帧**，不全量解压。典型会话 1848 帧、2.7 MB 压缩、8.7 MB 明文，读取耗时约 12 ms
+- **按 seq 二分定位**：seq 在日志里单调递增，因此可以跳过无关帧
+- **15 档渐进式预算裁剪**：从最不值钱的内容开始砍（工具流水 → 助手结论 → 用户意图），每档重测一次，够用就停
+- **只认真正由人发出的消息**：DSH 会往日志里插 `runtime-context`、`skill-catalog`、`tool-jobs` 等合成消息，这些会被排除，不会污染摘要
+
+### 产出什么
+
+摘要由五部分组成，每部分都带 `seq` 便于追溯：
+
+| 部分 | 内容 |
+|---|---|
+| `userIntents` | 用户历次真实意图 |
+| `assistantGist` | 助手的关键结论 |
+| `toolTrace` | 工具调用及成功/失败状态 |
+| `filesTouched` | 本次会话读写过的文件路径 |
+| `attachments` | 附件指针（只存路径与元信息，不塞 base64） |
+
+### 定向读取
+
+除了自动摘要，还可以用 key 精确取内容：
+
+| key 形式 | 取什么 |
+|---|---|
+| `file:/abs/path` | 指定文件的文本内容 |
+| `seq:120-160` | 该 seq 区间的原始记录 |
+| `call:CALL_ID` | 某次工具调用的参数与结果 |
+| `attachment:sha256:...` | 附件的对象路径与元信息 |
+
+### 与「只塞最近对话」的区别
+
+| | 只塞最近对话 | 本插件 |
+|---|---|---|
+| 数据来源 | 内存里的消息列表 | 持久化日志文件 |
+| 时间跨度 | 受上下文窗口限制 | 整个会话历史，含已被压缩遮蔽的部分 |
+| 工具调用 | 通常不包含 | 含参数、结果、成败状态 |
+| 文件线索 | 无 | 有，精确到路径与操作类型 |
+| 成本 | 随历史线性增长 | 按预算裁剪，可控 |
+
+启用方式：输入框旁的「上下文」胶囊按钮。默认关闭，开启后会把摘要并入增强请求。
 
 ## HTTP 接口
 
