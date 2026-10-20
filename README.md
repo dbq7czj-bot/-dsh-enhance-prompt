@@ -4,27 +4,40 @@
 [![DSH](https://img.shields.io/badge/DSH-0.2.1--rc.2-blue)](https://github.com/deepseek-ai/deepseek-harness)
 [![Node](https://img.shields.io/badge/node-%3E%3D22-green)](package.json)
 
-DSH（DeepSeek Harness）原生增强提示词插件：把输入框草稿交给大模型改写得更清晰、更具体，原地替换，可一键恢复。
+DSH（DeepSeek Harness）原生增强提示词插件：把输入框草稿交给大模型改写得更清晰、更具体，三拍循环切换，结果缓存复用。
 
 ![输入框增强按钮](./screenshot.png)
 
 ## 功能
 
-- **输入框魔棒按钮**：点一下把草稿改写成更明确的提示词，再点一下恢复原文
+- **三拍循环按钮**：点一下增强，再点回原文，再点又显示上次结果 —— 反复切换不再重复请求模型
+- **增强结果缓存**：同一份草稿 + 同一个模型时，第 2、3 次点击直接复用，不消耗调用配额；只有换模型或改草稿才会重新生成
 - **三档模型路由**：省 token / 平衡 / 最强，可按需切换，失败自动向上升级
 - **可选上下文增强**：把当前会话摘要（意图 / 工具动作 / 触碰的文件）一并发给模型，帮助消解指代歧义
 - **省 token 优先**：默认走低延迟通道，避免每次增强都消耗最贵的模型
+
+### 三拍循环怎么点
+
+| 点击 | 显示 | 是否调用模型 |
+|---|---|---|
+| 第 1 次 | 增强结果 | 首次调用；已有缓存则直接复用 |
+| 第 2 次 | 原始输入 | 不调用 |
+| 第 3 次 | 上次的增强结果 | 不调用（读缓存） |
+| 第 4 次起 | 在第 2、3 拍之间交替 | 不调用 |
+
+缓存只在两种情况下失效：**换了增强所用模型**，或**手动改了草稿**。
 
 ## 安装
 
 需要 DSH `0.2.1-rc.2` 或更高版本，Node.js >= 22。
 
 ```bash
-# 1. 把本包放到插件目录
-git clone <repo-url> ~/.dsh/plugins/dsh-enhance-prompt
+# 1. 克隆到插件目录
+git clone https://github.com/dbq7czj-bot/-dsh-enhance-prompt.git \
+  ~/.dsh/plugins/dsh-enhance-prompt
 
-# 2. 链接到你的 profile（以 desktop 为例）
-cd ~/.dsh/profiles/desktop
+# 2. 链接到你的 profile（把 <profile> 换成你实际在用的 profile 名）
+cd ~/.dsh/profiles/<profile>
 npm install --save file:../../plugins/dsh-enhance-prompt
 ```
 

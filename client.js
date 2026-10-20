@@ -76,6 +76,26 @@ window.__ModuleLoader__.load({
       );
     }
 
+    /** 第三拍用：重做箭头，表示「再看一次上次的增强结果」 */
+    function IconRedo() {
+      return h(
+        "svg",
+        {
+          viewBox: "0 0 24 24",
+          width: 15,
+          height: 15,
+          fill: "none",
+          stroke: "currentColor",
+          strokeWidth: 1.8,
+          strokeLinecap: "round",
+          strokeLinejoin: "round",
+          "aria-hidden": true,
+        },
+        h("path", { d: "M21 7v6h-6" }),
+        h("path", { d: "M20.5 13a9 9 0 1 1-2.6-8.4L21 7" })
+      );
+    }
+
     function ensureKeyframes() {
       if (typeof document === "undefined") return;
       const id = "dsh-enhance-prompt-style";
@@ -183,12 +203,27 @@ window.__ModuleLoader__.load({
      */
     function EnhanceButton(props) {
       const { inputActions, draftText, route, directory, sessionId } = props || {};
-      const [phase, setPhase] = useState("idle"); // idle | running | done
+      // ── 三拍循环 ──
+      // 循环位置由 step 单独记录（0→1→2→0…），phase 只负责「当前显示什么」。
+      // 两者必须分开：第 1 拍结束和第 3 拍结束时显示的都是增强结果，
+      // 仅凭 phase 无法判断下一次该走哪一拍。
+      //   step 0：idle     —— 显示原文，点击调模型（或命中缓存）生成增强结果 → step 1
+      //   step 1：done     —— 显示增强结果，点击显示原文，不调模型           → step 2
+      //   step 2：restored —— 显示原文，点击再显示增强结果，不调模型         → step 0
+      const [step, setStep] = useState(0);
+      const [phase, setPhase] = useState("idle"); // idle | running | done | restored
       const [error, setError] = useState("");
       const abortRef = useRef(null);
       const snapRef = useRef({ before: "", after: "" });
       // 记录本次实际命中的模型（分层路由可能换掉首选）
       const usedRef = useRef(null);
+      /**
+       * 增强结果缓存。只在两种情况下失效：
+       *   1) 用户换了增强所用模型（modelKey 变化）
+       *   2) 用户手动改了草稿，或草稿被别处重写（原文对不上）
+       * 其余情况（第二、三次点击）一律复用，绝不重复请求大模型。
+       */
+      const cacheRef = useRef({ modelKey: null, before: "", after: "" });
       // 悬停/按下视觉反馈（必须在任何 early return 之前声明）
       const [hover, setHover] = useState(false);
       const [press, setPress] = useState(false);
@@ -253,18 +288,49 @@ window.__ModuleLoader__.load({
       const currentSel = (dirState && dirState.current) || route || null;
       const active = picked || currentSel;
 
+      /**
+       * 当前「增强效果所用模型」的稳定标识，用作缓存失效依据。
+       *   - 手动选了模型：provider/model 拼起来
+       *   - 没手动选：用 tier（走分层路由，实际命中的模型可能变，但对用户而言
+       *     只要档位没变就算同一个选择，避免路由内部的自动升级导致缓存反复失效）
+       * 换档位或换具体模型 → 标识变化 → 下一次增强必然重新生成。
+       */
+      const modelKey = picked
+        ? `pick:${picked.provider || ""}/${picked.model || ""}`
+        : `tier:${tier}`;
+
+      /**
+       * 模型一变，缓存立刻作废，并把循环重置回起点。
+       * 否则用户停在第 3 拍时换模型，下一次点击会读到旧模型的缓存结果，
+       * 违背「换模型必须重新生成」的要求。
+       */
+      useEffect(() => {
+        const c = cacheRef.current;
+        if (c && c.after && c.modelKey !== modelKey) {
+          cacheRef.current = { modelKey: null, before: "", after: "" };
+          setPhase("idle");
+          setStep(0);
+        }
+      }, [modelKey]);
+
       useEffect(() => {
         ensureKeyframes();
       }, []);
 
       const text = typeof draftText === "string" ? draftText : "";
 
-      // 用户手动改过文本 -> 恢复入口失效
+      // 草稿被改过（手动编辑 / 外部写入）→ 当前显示不再是插件放进去的内容，
+      // 整个三拍循环回到起点，缓存也一并作废（原文已变，旧结果不再对应）。
       useEffect(() => {
-        if (phase !== "done") return;
-        if (text !== snapRef.current.after) {
+        const inLoop = phase === "done" || phase === "restored";
+        if (!inLoop) return;
+        const expected =
+          phase === "done" ? snapRef.current.after : snapRef.current.before;
+        if (text !== expected) {
           setPhase("idle");
+          setStep(0);
           setError("");
+          cacheRef.current = { modelKey: null, before: "", after: "" };
         }
       }, [text, phase]);
 
@@ -278,11 +344,37 @@ window.__ModuleLoader__.load({
           abortRef.current = null;
         }
         setPhase("idle");
+        setStep(0);
       }, []);
 
       const run = useCallback(async () => {
         const original = text;
         if (!original.trim()) return;
+
+        // ── 缓存命中：同一个模型 + 同一份原文 → 直接复用，不请求大模型 ──
+        const cached = cacheRef.current;
+        if (
+          cached &&
+          cached.after &&
+          cached.modelKey === modelKey &&
+          cached.before === original
+        ) {
+          snapRef.current = { before: cached.before, after: cached.after };
+          if (inputActions && typeof inputActions.setDraft === "function") {
+            inputActions.setDraft(cached.after);
+            if (typeof inputActions.persistDraft === "function") {
+              try {
+                inputActions.persistDraft();
+              } catch {
+                /* ignore */
+              }
+            }
+          }
+          setError("");
+          setPhase("done");
+          setStep(1);
+          return;
+        }
 
         if (abortRef.current) {
           try {
@@ -340,6 +432,12 @@ window.__ModuleLoader__.load({
           const enhanced = String(data.text).trim();
           snapRef.current = { before: original, after: enhanced };
           if (data.model) usedRef.current = data.model;
+          // 写入缓存：记下这次用的是哪个模型标识，供后续点击直接复用
+          cacheRef.current = {
+            modelKey,
+            before: original,
+            after: enhanced,
+          };
 
           if (inputActions && typeof inputActions.setDraft === "function") {
             inputActions.setDraft(enhanced);
@@ -352,6 +450,7 @@ window.__ModuleLoader__.load({
             }
           }
           setPhase("done");
+          setStep(1);
         } catch (e) {
           if (controller.signal.aborted) return;
           setError(String((e && e.message) || e));
@@ -359,28 +458,58 @@ window.__ModuleLoader__.load({
         } finally {
           if (abortRef.current === controller) abortRef.current = null;
         }
-      }, [text, inputActions, active, useContext, sessionId, tier, picked]);
+      }, [text, inputActions, active, useContext, sessionId, tier, picked, modelKey]);
 
-      const restore = useCallback(() => {
-        const { before } = snapRef.current;
-        if (inputActions && typeof inputActions.setDraft === "function") {
-          try {
-            inputActions.setDraft(before);
-            if (typeof inputActions.persistDraft === "function") inputActions.persistDraft();
-          } catch {
-            /* ignore */
+      /** 把指定内容写回输入框（不触碰缓存） */
+      const applyDraft = useCallback(
+        (value) => {
+          if (inputActions && typeof inputActions.setDraft === "function") {
+            try {
+              inputActions.setDraft(value);
+              if (typeof inputActions.persistDraft === "function") inputActions.persistDraft();
+            } catch {
+              /* ignore */
+            }
           }
-        }
-        setPhase("idle");
+        },
+        [inputActions]
+      );
+
+      /** 第 2 拍：显示最初的原文。不调模型，缓存保留。 */
+      const restore = useCallback(() => {
+        applyDraft(snapRef.current.before);
+        setPhase("restored");
+        setStep(2);
         setError("");
-      }, [inputActions]);
+      }, [applyDraft]);
+
+      /** 第 3 拍：再次显示上次的增强结果。不调模型，直接读缓存。 */
+      const showEnhanced = useCallback(() => {
+        const cached = cacheRef.current;
+        const after = (cached && cached.after) || snapRef.current.after;
+        if (!after) {
+          // 缓存意外缺失（例如页面刷新后 ref 丢失）：退回起点重新生成
+          setPhase("idle");
+          setStep(0);
+          return;
+        }
+        applyDraft(after);
+        setPhase("done");
+        setStep(1); // 显示增强结果 → 下一次点击回到第 2 拍（显示原文）
+        setError("");
+      }, [applyDraft]);
 
       // 草稿为空 -> 不显示
       if (!text.trim()) return null;
 
       const onClick = () => {
         if (phase === "running") return cancel();
-        if (phase === "done") return restore();
+        // 按 step 决定走哪一拍。
+        //   0 → 生成（可能命中缓存，也可能真的调模型），之后 step=1
+        //   1 → 显示原文，不调模型，之后 step=2
+        //   2 → 显示增强结果，不调模型，之后 step=1（回到第 1 拍位置）
+        if (step === 1) return restore();
+        if (step === 2) return showEnhanced();
         return run();
       };
 
@@ -388,30 +517,37 @@ window.__ModuleLoader__.load({
         phase === "running"
           ? "增强中…（点击取消）"
           : phase === "done"
-            ? "已增强（点击恢复原文）"
-            : "增强提示词";
+            ? "已增强（点击还原原文）"
+            : phase === "restored"
+              ? "已还原（点击再看增强结果）"
+              : "增强提示词";
       const title = error ? `${label}\n失败：${error}` : label;
 
       // ---- 苹果风格：圆形图标按钮 + 毛玻璃 + 悬停/按下反馈 ----
       const SIZE = 28;
       const isDone = phase === "done";
+      const isRestored = phase === "restored";
       const isRunning = phase === "running";
 
       const bg = error
         ? "rgba(255,69,58,0.12)"
         : isDone
           ? "rgba(10,132,255,0.12)"
-          : hover
-            ? "var(--dsw-alias-interactive-bg-hover, rgba(255,255,255,0.09))"
-            : "transparent";
+          : isRestored
+            ? "rgba(142,142,147,0.12)"
+            : hover
+              ? "var(--dsw-alias-interactive-bg-hover, rgba(255,255,255,0.09))"
+              : "transparent";
 
       const fg = error
         ? "var(--dsw-alias-label-danger, #ff453a)"
         : isDone
           ? "var(--dsw-alias-label-accent, #0a84ff)"
-          : hover
-            ? "var(--dsw-alias-label-primary, #f5f5f7)"
-            : "var(--dsw-alias-label-tertiary, #8e8e93)";
+          : isRestored
+            ? "var(--dsw-alias-label-secondary, #aeaeb2)"
+            : hover
+              ? "var(--dsw-alias-label-primary, #f5f5f7)"
+              : "var(--dsw-alias-label-tertiary, #8e8e93)";
 
       const TIER_LABEL = { cheap: "省 token", balanced: "平衡", strong: "最强" };
       const currentLabel = (() => {
@@ -763,7 +899,13 @@ window.__ModuleLoader__.load({
             WebkitTapHighlightColor: "transparent",
           },
         },
-        isRunning ? h(IconSpinner) : isDone ? h(IconUndo) : h(IconWand)
+        isRunning
+          ? h(IconSpinner)
+          : isDone
+            ? h(IconUndo)
+            : isRestored
+              ? h(IconRedo)
+              : h(IconWand)
         )
       );
     }

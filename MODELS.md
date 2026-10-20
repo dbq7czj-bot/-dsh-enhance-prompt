@@ -1,23 +1,22 @@
 # dsh-enhance-prompt — 模型通道与上下文机制
 
-> 本文件描述插件在 `~/.dsh/profiles/desktop` 里实际运行的模型调用路径与上下文读取机制。
-> 所有数值均来自本机实测，不是估算。
+> 本文件描述插件的模型调用路径与上下文读取机制。
+> 文中的延迟与 token 数值来自开发机实测，仅作量级参考——实际表现取决于你所用的 provider。
 
 ---
 
 ## 一、为什么要做分层路由
 
 增强任务本身很轻：输入是一段输入框草稿，输出上限 800 字符，不需要长上下文推理。
-但本机实测发现，**不同 provider 的延迟差 10 倍以上**：
+但开发机实测发现，**不同 provider 的延迟可以差一个数量级**：
 
-| 模型 | 延迟（3 次中位） |
+| 通道类型 | 典型延迟量级 |
 |---|---|
-| `our-free-model/kilo-auto/free` | 1.6 s |
-| `buddy/deepseek-v4-flash` | 2.5 s |
-| `workbuddy-ai/glm-5.3-flash` | 3.4 s |
-| `workbuddy-ai/hy3` | 25 s |
+| 免费聚合通道 | 1–3 s |
+| 付费快速线 | 2–5 s |
+| 大体量推理模型 | 20 s 以上 |
 
-同时免费渠道有积分/配额限制，不适合做无脑默认；付费通道稳定但成本高。
+同时免费渠道常有积分/配额限制，不适合做无脑默认；付费通道稳定但成本高。
 
 **结论：选对模型比少读上下文更省。** 因此做成三层。
 
@@ -27,11 +26,14 @@
 
 | 档位 | 候选顺序 | 适用 |
 |---|---|---|
-| `cheap`（默认） | `our-free-model/kilo-auto/free` → `buddy/deepseek-v4-flash` → balanced 全部 → strong | 日常增强 |
-| `balanced` | `workbuddy/deepseek-v4.1-flash` → `workbuddy-ai/deepseek-v4.1-flash-sg` → `workbuddy-ai/glm-5.3-flash` → strong | 免费线不稳时 |
-| `strong` | 当前会话所选模型 | 质量优先 |
+| `cheap`（默认） | `tiers.cheap` → `tiers.balanced` → 宿主默认 | 日常增强 |
+| `balanced` | `tiers.balanced` → 宿主默认 | 免费线不稳时 |
+| `strong` | 宿主默认模型 | 质量优先 |
 
-`strong` 层的候选在运行时从会话 projection 的 `modelSelection` 注入，不写死在表里。
+候选来自你在 `package.json` 里配置的 `dsh.enhancePrompt.tiers`，**插件本身不内置任何 provider 绑定**。
+不配置时三个档位都直接走宿主当前默认模型，开箱即用。
+
+`strong` 层使用 `routeFromProfileConfig()` 读到的 profile/宿主默认路由，不保证等同于当前会话所选模型。
 
 ### 失败升级规则
 
@@ -50,28 +52,24 @@ strong     → strong
 
 ---
 
-## 三、实测可用模型（2026-10-19）
+## 三、确认本机可用的模型
 
-```
-OK    buddy/deepseek-v4-flash
-OK    workbuddy-ai/hy3
-OK    workbuddy-ai/deepseek-v4.1-flash-sg
-OK    workbuddy-ai/glm-5.3-flash
-OK    workbuddy-ai/step-5-preview
-OK    workbuddy/hy3
-OK    workbuddy/deepseek-v4.1-flash
-OK    our-free-model/kilo-auto/free
-FAIL  workbuddy-ai/deepseek-v4.1-flash
-FAIL  workbuddy-ai/gemini-3.5-flash
-FAIL  workbuddy-ai/gpt-6-luna
-FAIL  workbuddy-global/deepseek-v4.1-flash
-FAIL  opencode/*
-FAIL  our-free-model/glm-5.3-flash-free
-FAIL  modlens-opencode/deepseek-v4-flash
-```
+插件不内置模型清单。你的机器上哪些 provider/model 可用，取决于你装了哪些适配器、登录了哪些账号。
+建议这样确认后再填进 `tiers` 配置：
 
-失败的多为「模型 id 在该 provider 下不存在」或「渠道未登录」。
-路由表只收录实测 OK 的，避免默认路径踩坑。
+1. 在 DSH 的模型选择器里展开目录，能看到的就是宿主任可的
+2. 或者用 `context` 端点旁路观察：调一次 `enhance` 并看返回的 `attempts` 数组，
+   每个候选的 `ok` / `error` 会明确告诉你哪个通道通、哪个报错
+
+常见的失败原因：
+
+| 现象 | 原因 |
+|---|---|
+| `模型 id 在该 provider 下不存在` | model 字段拼错，或该通道未开通 |
+| `渠道未登录` / `401` / `403` | 账号未授权，或凭据过期 |
+| `QUOTA_EXCEEDED` / `402` | 配额用尽 |
+
+把确认可用的写进 `dsh.enhancePrompt.tiers`，避免默认路径踩不存在的通道。
 
 ---
 
@@ -167,7 +165,7 @@ tool-jobs       15   ← 后台任务通知，排除
 
 客户端默认传 `budgetTokens: 1200`。
 
-**省 token 的关键不在压预算，而在选模型**——`hy3` 跑 25 秒的调用，换成 `kilo-auto/free` 只要 1.6 秒，token 单价还更低。
+**省 token 的关键不在压预算，而在选模型**——一个 25 秒的大模型调用，换到 1.6 秒的快速线上，既省等待也省单价。
 
 ### 5.5 摘要与实体分离
 
@@ -209,9 +207,9 @@ DSH 的 adapter 失败不抛异常，而是 yield 终态 chunk：
   "ok": false,
   "error": "all candidate models failed",
   "attempts": [
-    { "provider": "our-free-model", "model": "kilo-auto/free",
+    { "provider": "<provider-a>", "model": "<model-a>",
       "ok": false, "error": "QUOTA_EXCEEDED / 402 / Insufficient Balance" },
-    { "provider": "buddy", "model": "deepseek-v4-flash", "ok": true }
+    { "provider": "<provider-b>", "model": "<model-b>", "ok": true }
   ]
 }
 ```
@@ -271,7 +269,7 @@ for (const cand of candidates) {
 取消后 failover 测试：
 
 ```
-实际调用过的模型: [ 'our-free-model/kilo-auto/free' ]
+实际调用过的模型: [ '<provider>/<model>' ]
 ✅ 只调用了 1 个（未继续升级）
 ```
 

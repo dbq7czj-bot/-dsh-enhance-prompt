@@ -1,6 +1,6 @@
 {
   "name": "dsh-enhance-prompt",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "DSH 原生增强提示词：把输入框草稿交给模型改写得更清晰具体，原地替换并可一键恢复",
   "type": "module",
   "main": "./dsh-enhance-prompt.single.mjs",
